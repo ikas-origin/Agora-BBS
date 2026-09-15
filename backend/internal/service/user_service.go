@@ -205,7 +205,7 @@ func decorateUser(user *model.User) {
 	if user.UnlockLevel >= 2 {
 		capabilities = append(capabilities, "create_topic")
 	}
-	if user.UnlockLevel >= 3 {
+	if user.UnlockLevel >= 3 || user.Role == "admin" {
 		capabilities = append(capabilities, "blind_review")
 	}
 	if user.Role == "admin" {

@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { authApi, getErrorMessage } from '@/services';
 import { useAuth } from '@/context/AuthContext';
 import { UserProfile } from '@/types/api';
 import UsageGuideCard from '@/components/UsageGuideCard';
 import { formatReadingDuration } from '@/lib/format';
+import { canBlindReview, capabilityLabel } from '@/lib/capabilities';
 
 const levelNames = ['阅读者', '讨论参与者', '主题发起者', '社区评审者'];
 
@@ -38,7 +40,8 @@ function ProfileContent({ user }: { user: UserProfile }) {
         <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">成长中心</p>
         <h1 className="mt-2 text-2xl font-bold">L{user.unlock_level} · {levelNames[user.unlock_level]}</h1>
         <p className="mt-3 text-sm text-[var(--text-muted)]">已验证阅读 {formatReadingDuration(user.verified_read_seconds)}</p>
-        <div className="mt-4 flex flex-wrap gap-2">{user.capabilities.map((ability) => <span key={ability} className="rounded-full bg-stone-100 px-3 py-1 text-xs">{ability}</span>)}</div>
+        <div className="mt-4 flex flex-wrap gap-2">{user.capabilities.map((ability) => <span key={ability} className="rounded-full bg-stone-100 px-3 py-1 text-xs">{capabilityLabel(ability)}</span>)}</div>
+        {canBlindReview(user) && <Link href="/reviews" className="paper-btn-primary mt-5 inline-block rounded-md px-4 py-2 text-sm">进入匿名盲审</Link>}
       </section>
       <section className="paper-card rounded-xl p-6">
         <h2 className="text-lg font-bold">社区自述</h2>

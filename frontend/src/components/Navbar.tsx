@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { canBlindReview } from '@/lib/capabilities';
 
 export default function Navbar() {
   const { user, logout, isLoading } = useAuth();
@@ -44,7 +45,7 @@ export default function Navbar() {
             <div className="flex items-center gap-4">
               <Link href="/my-content" className="text-sm text-gray-600 hover:text-gray-900">我的内容</Link>
               <Link href="/bookmarks" className="text-sm text-gray-600 hover:text-gray-900">收藏</Link>
-              {user.capabilities.includes('review') && <Link href="/reviews" className="text-sm text-gray-600 hover:text-gray-900">匿名盲审</Link>}
+              {canBlindReview(user) && <Link href="/reviews" className="text-sm text-gray-600 hover:text-gray-900">匿名盲审</Link>}
               {user.role === 'admin' && <Link href="/admin" className="text-sm font-semibold text-red-700 hover:text-red-900">进入管理端</Link>}
               <Link href="/profile" className="text-sm text-gray-600 hover:text-gray-900">成长中心</Link>
               <span className="text-sm text-gray-600">

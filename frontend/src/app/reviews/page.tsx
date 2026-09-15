@@ -5,6 +5,8 @@ import { useAuth } from '@/context/AuthContext';
 import { getErrorMessage, reviewApi } from '@/services';
 import { ReviewTask } from '@/types/api';
 import Pagination from '@/components/Pagination';
+import Link from 'next/link';
+import { canBlindReview } from '@/lib/capabilities';
 
 export default function ReviewsPage() {
   const { user, isLoading } = useAuth();
@@ -23,7 +25,7 @@ export default function ReviewsPage() {
 
   useEffect(() => {
     if (isLoading) return;
-    if (!user?.capabilities.includes('review')) return;
+    if (!canBlindReview(user)) return;
     let cancelled = false;
     reviewApi.list()
       .then((result) => { if (!cancelled) setTasks(result.data); })
@@ -32,7 +34,8 @@ export default function ReviewsPage() {
   }, [isLoading, user]);
 
   if (isLoading || loading) return <div className="mx-auto h-48 max-w-3xl animate-pulse rounded-xl bg-stone-200" />;
-  if (!user?.capabilities.includes('review')) return <div className="paper-card mx-auto max-w-3xl rounded-xl p-10 text-center">匿名盲审将在达到 L3 后解锁。</div>;
+  if (!user) return <div className="paper-card mx-auto max-w-3xl rounded-xl p-10 text-center"><p>登录后才能查看匿名盲审任务。</p><Link href="/login" className="paper-btn-primary mt-4 inline-block rounded px-4 py-2 text-sm">前往登录</Link></div>;
+  if (!canBlindReview(user)) return <div className="paper-card mx-auto max-w-3xl rounded-xl p-10 text-center"><p>匿名盲审将在达到 L3 后解锁，你当前为 L{user.unlock_level}。</p><Link href="/profile" className="mt-3 inline-block text-sm font-semibold text-[var(--accent-ink)] hover:underline">查看成长条件 →</Link></div>;
   const pageTasks = tasks.slice((page - 1) * pageSize, page * pageSize);
 
   return (
