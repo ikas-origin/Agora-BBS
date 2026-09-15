@@ -1,0 +1,1794 @@
+openapi: 3.0.3
+info:
+  title: Agora-BBS API
+  version: 1.0.0
+  description: |
+    Agora-BBS 用户端与管理端 HTTP API，可直接导入 Apifox。
+
+    除健康检查外，响应统一为 `{code, msg, data, request_id}`。需要登录的接口使用
+    `Authorization: Bearer <JWT>`。管理员密码登录后还必须完成邮箱验证码校验，
+    使用校验接口签发的管理员 JWT 访问 `/admin/*`。
+servers:
+  - url: http://localhost:8080/api/v1
+    description: 本机 Docker 演示环境
+  - url: http://{host}:{port}/api/v1
+    description: 校园网 Docker 演示环境（host 按当前 IP 修改）
+    variables:
+      host:
+        default: 10.236.104.92
+        description: 演示电脑当前校园网 IPv4 地址
+      port:
+        default: "8080"
+security: []
+tags:
+  - name: 系统
+    description: 健康检查与基础可用性。
+  - name: 认证
+    description: 注册、统一登录和管理员邮箱二次验证。
+  - name: 用户
+    description: 当前用户资料、成长状态和个人内容。
+  - name: 分类
+    description: 公开讨论分类。
+  - name: 主题
+    description: 结构化主题、草稿、冷静期和内容检索。
+  - name: 回复
+    description: 类型化、多层级回复。
+  - name: 收藏
+    description: 当前用户的主题收藏。
+  - name: 阅读治理
+    description: 有效阅读会话、心跳和公开治理参数。
+  - name: 语境反馈
+    description: 带立场、标签和理由的反馈，以及评论聚类。
+  - name: 匿名盲审
+    description: L3 用户的匿名评审任务和提交。
+  - name: 兼容点赞
+    description: 历史客户端兼容接口，新客户端应使用语境反馈。
+  - name: 管理后台
+    description: 需要管理员密码登录、邮箱验证码校验后取得的 JWT。
+paths:
+  /ping:
+    get:
+      tags: [系统]
+      summary: API 健康检查
+      operationId: ping
+      responses:
+        "200":
+          description: API 正常
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+              example: {status: ok}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /auth/register:
+    post:
+      tags: [认证]
+      summary: 注册普通用户
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegisterRequest"}
+            example: {username: alice, password: password123, email: alice@example.com}
+      responses:
+        "200": {$ref: "#/components/responses/AuthSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /auth/login:
+    post:
+      tags: [认证]
+      summary: 统一登录
+      description: 普通用户直接取得 JWT；管理员只取得邮箱验证挑战，不会立即取得 JWT。
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoginRequest"}
+            examples:
+              normalUser:
+                summary: 普通演示用户
+                value: {username: demo_l2, password: password}
+              administrator:
+                summary: 管理员（随后完成邮箱验证）
+                value: {username: admin, password: admin123}
+      responses:
+        "200": {$ref: "#/components/responses/LoginSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+
+  /auth/admin/verify-email:
+    post:
+      tags: [认证]
+      summary: 校验管理员邮箱验证码
+      description: 验证成功后返回可访问管理后台的 JWT。验证码默认 10 分钟有效。
+      operationId: verifyAdminEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AdminEmailVerificationRequest"}
+            example: {challenge_id: 0123456789abcdef0123456789abcdef, code: "123456"}
+      responses:
+        "200": {$ref: "#/components/responses/AuthSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /users/me:
+    get:
+      tags: [用户]
+      summary: 获取当前用户资料与成长能力
+      operationId: getCurrentUser
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/UserSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /users/me/contents:
+    get:
+      tags: [用户]
+      summary: 分页查询自己的主题、回复和草稿
+      operationId: listMyContents
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ContentTypeOptional"}
+        - {$ref: "#/components/parameters/ContentStatus"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize10"}
+      responses:
+        "200": {$ref: "#/components/responses/MyContentPageSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /users/me/onboarding:
+    put:
+      tags: [用户]
+      summary: 提交或更新社区自述
+      description: 提交后进入匿名盲审；普通用户响应不会泄露隐藏信任分。
+      operationId: saveOnboarding
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OnboardingRequest"}
+            example:
+              statement: 我希望认真阅读他人的论证，在回复中区分事实、判断与个人经验，并说明自己的不确定性。
+              background_tag: 后端开发学习者
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /categories:
+    get:
+      tags: [分类]
+      summary: 查询启用的讨论分类
+      operationId: listCategories
+      responses:
+        "200": {$ref: "#/components/responses/CategoryListSuccess"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /search:
+    get:
+      tags: [主题, 回复]
+      summary: 模糊搜索已发布主题和回复
+      operationId: searchContents
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: 搜索标题、正文或作者名
+          schema: {type: string, minLength: 1, maxLength: 100}
+          example: Go 高并发
+        - {$ref: "#/components/parameters/ContentTypeOptional"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize10"}
+      responses:
+        "200": {$ref: "#/components/responses/SearchPageSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+
+  /topics:
+    get:
+      tags: [主题]
+      summary: 分页查询主题
+      description: 未登录用户只看到公开内容；作者登录后可以看到自己的非公开状态内容。
+      operationId: listTopics
+      parameters:
+        - {$ref: "#/components/parameters/CategoryIdQuery"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20"}
+      responses:
+        "200": {$ref: "#/components/responses/TopicPageSuccess"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+    post:
+      tags: [主题]
+      summary: 创建结构化主题（L2）
+      description: 创建后进入冷静期；长文或高争议分类在冷静期结束后进入盲审。
+      operationId: createTopic
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateTopicRequest"}
+            example:
+              category_id: 3
+              title: 从 Java 开发者视角理解 Go 的并发模型
+              structured_content:
+                claim: Go 使用 goroutine 和 channel 降低了组织并发任务的心智负担。
+                evidence: goroutine 初始栈较小，运行时调度器可在少量系统线程上调度大量任务。
+                uncertainty: 实际吞吐仍受锁竞争、I/O 模型和部署资源影响。
+      responses:
+        "200": {$ref: "#/components/responses/TopicMutationSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /topics/drafts:
+    post:
+      tags: [主题]
+      summary: 新建主题草稿
+      operationId: createTopicDraft
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SaveTopicDraftRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/TopicSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /topics/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/Id"}
+    get:
+      tags: [主题]
+      summary: 获取主题详情
+      operationId: getTopic
+      responses:
+        "200": {$ref: "#/components/responses/TopicSuccess"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    patch:
+      tags: [主题]
+      summary: 冷静期内编辑自己的主题
+      description: 编辑会重新开始冷静期计时。
+      operationId: updateCoolingTopic
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdateTopicRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/TopicSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    delete:
+      tags: [主题]
+      summary: 冷静期内无痕撤回自己的主题
+      operationId: recallCoolingTopic
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /topics/{id}/draft:
+    parameters:
+      - {$ref: "#/components/parameters/Id"}
+    patch:
+      tags: [主题]
+      summary: 更新自己的主题草稿
+      operationId: updateTopicDraft
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SaveTopicDraftRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/TopicSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    delete:
+      tags: [主题]
+      summary: 删除自己的主题草稿
+      operationId: deleteTopicDraft
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /topics/{id}/publish:
+    post:
+      tags: [主题]
+      summary: 将草稿提交到冷静期（L2）
+      operationId: publishTopicDraft
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      responses:
+        "200": {$ref: "#/components/responses/TopicMutationSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /topics/{id}/posts:
+    parameters:
+      - {$ref: "#/components/parameters/Id"}
+    get:
+      tags: [回复]
+      summary: 分页查询主题下的回复
+      description: "`parent_id` 指向父回复，客户端据此构造任意层级回复树。"
+      operationId: listTopicPosts
+      parameters:
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20"}
+      responses:
+        "200": {$ref: "#/components/responses/PostPageSuccess"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    post:
+      tags: [回复]
+      summary: 创建类型化回复（L1）
+      operationId: createPost
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePostRequest"}
+            example:
+              parent_id: null
+              content: 我赞同区分语言并发机制和最终业务吞吐，后者还需要结合数据库连接池观察。
+              post_type: evidence
+      responses:
+        "200": {$ref: "#/components/responses/PostMutationSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /posts/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/Id"}
+    patch:
+      tags: [回复]
+      summary: 冷静期内编辑自己的回复
+      operationId: updateCoolingPost
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdatePostRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/PostSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    delete:
+      tags: [回复]
+      summary: 冷静期内无痕撤回自己的回复
+      operationId: recallCoolingPost
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /bookmarks:
+    get:
+      tags: [收藏]
+      summary: 分页查询当前用户收藏
+      operationId: listBookmarks
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20"}
+      responses:
+        "200": {$ref: "#/components/responses/BookmarkPageSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /bookmarks/{topicId}:
+    parameters:
+      - {$ref: "#/components/parameters/TopicIdPath"}
+    put:
+      tags: [收藏]
+      summary: 收藏主题
+      operationId: createBookmark
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/BookmarkStatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    delete:
+      tags: [收藏]
+      summary: 取消收藏主题
+      operationId: deleteBookmark
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/BookmarkStatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /governance/policy:
+    get:
+      tags: [阅读治理]
+      summary: 获取前端所需公开治理参数
+      operationId: getGovernancePolicy
+      responses:
+        "200": {$ref: "#/components/responses/GovernancePolicySuccess"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /reading-sessions:
+    post:
+      tags: [阅读治理]
+      summary: 开始主题或论坛手册阅读会话
+      operationId: startReadingSession
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/StartReadingRequest"}
+            examples:
+              topic: {summary: 阅读主题, value: {topic_id: 1}}
+              guide: {summary: 阅读论坛使用手册, value: {resource: forum-guide}}
+      responses:
+        "200": {$ref: "#/components/responses/ReadingSessionSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /reading-sessions/{id}/heartbeat:
+    patch:
+      tags: [阅读治理]
+      summary: 上报阅读心跳、滚动进度和回复区停留
+      operationId: heartbeatReadingSession
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ReadingSessionId"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReadingHeartbeatRequest"}
+            example: {progress: 75, reply_focused: false}
+      responses:
+        "200": {$ref: "#/components/responses/ReadingSessionSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /reading-sessions/{id}/complete:
+    post:
+      tags: [阅读治理]
+      summary: 幂等完成或保存阅读会话
+      description: 可携带页面关闭前最后一次浏览状态；重复调用不会重复累计时长。
+      operationId: completeReadingSession
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ReadingSessionId"}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CompleteReadingRequest"}
+            example: {progress: 100, reply_focused: true}
+      responses:
+        "200": {$ref: "#/components/responses/ReadingSessionSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /feedbacks/summary:
+    get:
+      tags: [语境反馈]
+      summary: 查询目标的反馈立场与标签汇总
+      description: 携带可选 JWT 时，响应会额外返回当前用户的 `mine` 反馈。
+      operationId: getFeedbackSummary
+      security: [{}, {bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/TargetType"}
+        - {$ref: "#/components/parameters/TargetId"}
+      responses:
+        "200": {$ref: "#/components/responses/FeedbackSummarySuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+
+  /feedbacks:
+    post:
+      tags: [语境反馈]
+      summary: 创建或修改语境反馈（L1）
+      description: 同一用户对同一目标只有一条有效反馈，再次提交即修改。
+      operationId: upsertFeedback
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/FeedbackRequest"}
+            example:
+              target_type: topic
+              target_id: 1
+              stance: support
+              tag: well_sourced
+              reason: 给出了可复核的数据来源和清晰的适用范围。
+      responses:
+        "200": {$ref: "#/components/responses/FeedbackSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /feedbacks/{id}:
+    delete:
+      tags: [语境反馈]
+      summary: 撤回自己的语境反馈
+      operationId: withdrawFeedback
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /topics/{id}/clusters:
+    get:
+      tags: [语境反馈]
+      summary: 查询主题的动态评论聚类标签
+      operationId: listTopicClusters
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      responses:
+        "200": {$ref: "#/components/responses/ClusterListSuccess"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+
+  /reviews/tasks:
+    get:
+      tags: [匿名盲审]
+      summary: 查询当前用户匿名评审任务（L3）
+      operationId: listReviewTasks
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {$ref: "#/components/responses/ReviewTaskListSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /reviews/tasks/{id}:
+    post:
+      tags: [匿名盲审]
+      summary: 提交匿名评审
+      operationId: submitReview
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReviewRequest"}
+            example: {appropriateness: true, sincerity: true, reason: 内容表达克制，论点与依据能够对应，也说明了尚未验证的边界。}
+      responses:
+        "200": {$ref: "#/components/responses/ReviewSubmissionSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /likes:
+    post:
+      deprecated: true
+      tags: [兼容点赞]
+      summary: 点赞（历史兼容）
+      operationId: legacyLike
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LikeRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+    delete:
+      deprecated: true
+      tags: [兼容点赞]
+      summary: 取消点赞（历史兼容）
+      operationId: legacyUnlike
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LikeRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /admin/overview:
+    get:
+      tags: [管理后台]
+      summary: 查询管理统计总览
+      operationId: getAdminOverview
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: days
+          in: query
+          schema: {type: integer, enum: [7, 30, 90], default: 7}
+      responses:
+        "200": {$ref: "#/components/responses/AdminOverviewSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /admin/users:
+    get:
+      tags: [管理后台]
+      summary: 搜索、筛选和排序用户
+      operationId: listAdminUsers
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Search"}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, username, level, trust_score, reading_seconds], default: created_at}
+        - {$ref: "#/components/parameters/OrderDesc"}
+        - name: level
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 3}
+        - name: role
+          in: query
+          schema: {type: string, enum: [user, admin]}
+        - name: status
+          in: query
+          schema: {type: string, enum: [active, suspended]}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20Admin"}
+      responses:
+        "200": {$ref: "#/components/responses/AdminUserPageSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /admin/users/{id}:
+    patch:
+      tags: [管理后台]
+      summary: 编辑用户身份、状态、等级和信任分
+      description: 调整原因会写入信任流水；不能停用自己或移除自己的管理员身份。
+      operationId: updateAdminUser
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AdminUserUpdateRequest"}
+            example:
+              username: alice
+              email: alice@example.com
+              role: user
+              status: active
+              unlock_level: 2
+              trust_score: 25
+              reason: 课堂演示中手动校准用户成长状态
+      responses:
+        "200": {$ref: "#/components/responses/AdminUserSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /admin/users/{id}/status:
+    patch:
+      tags: [管理后台]
+      summary: 快速停用或恢复用户
+      operationId: setAdminUserStatus
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UserStatusRequest"}
+            example: {status: suspended}
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /admin/contents:
+    get:
+      tags: [管理后台]
+      summary: 搜索、筛选和排序治理内容
+      operationId: listAdminContents
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Search"}
+        - name: type
+          in: query
+          schema: {type: string, enum: [topic, post], default: topic}
+        - name: status
+          in: query
+          schema: {$ref: "#/components/schemas/ContentStatus"}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, title, author, status], default: created_at}
+        - {$ref: "#/components/parameters/OrderDesc"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20Admin"}
+      responses:
+        "200": {$ref: "#/components/responses/AdminContentPageSuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /admin/contents/{type}/{id}/visibility:
+    patch:
+      tags: [管理后台]
+      summary: 隐藏或恢复主题/回复
+      description: 管理员只能改变可见性，不能直接篡改用户正文。
+      operationId: setAdminContentVisibility
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema: {type: string, enum: [topic, post]}
+        - {$ref: "#/components/parameters/Id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/VisibilityRequest"}
+            example: {hidden: true}
+      responses:
+        "200": {$ref: "#/components/responses/VisibilitySuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /admin/llm-jobs:
+    get:
+      tags: [管理后台]
+      summary: 搜索、筛选和排序 LLM 作业
+      operationId: listAdminLlmJobs
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Search"}
+        - name: status
+          in: query
+          schema: {type: string, example: failed}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, latency_ms, tokens, attempts, status], default: created_at}
+        - {$ref: "#/components/parameters/OrderDesc"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20Admin"}
+      responses:
+        "200": {$ref: "#/components/responses/AdminLlmJobPageSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /admin/llm-jobs/{id}/retry:
+    post:
+      tags: [管理后台]
+      summary: 安全重试失败的 LLM 作业
+      operationId: retryAdminLlmJob
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      responses:
+        "200": {$ref: "#/components/responses/StatusSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /admin/trust-logs:
+    get:
+      tags: [管理后台]
+      summary: 搜索、筛选和排序信任流水
+      operationId: listAdminTrustLogs
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Search"}
+        - name: user_id
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, score_delta, username, event_type], default: created_at}
+        - {$ref: "#/components/parameters/OrderDesc"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize20Admin"}
+      responses:
+        "200": {$ref: "#/components/responses/AdminTrustLogPageSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /admin/categories:
+    get:
+      tags: [管理后台]
+      summary: 查询全部分类（包含停用项）
+      operationId: listAdminCategories
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Search"}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [sort_order, name, created_at, status], default: sort_order}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc], default: asc}
+      responses:
+        "200": {$ref: "#/components/responses/CategoryListSuccess"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    post:
+      tags: [管理后台]
+      summary: 新增讨论分类
+      operationId: createAdminCategory
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CategoryWriteRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CategorySuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /admin/categories/{id}:
+    patch:
+      tags: [管理后台]
+      summary: 编辑、排序或停用分类
+      operationId: updateAdminCategory
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CategoryWriteRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CategorySuccess"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 使用登录接口返回的 `data.token`；管理员须使用邮箱验证接口返回的 Token。
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    TopicIdPath:
+      name: topicId
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    ReadingSessionId:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+      example: 7d9ccfa4-2d9c-45c8-9482-f9eb66503dd1
+    CategoryIdQuery:
+      name: category_id
+      in: query
+      schema: {type: integer, format: int64, minimum: 1}
+    TargetType:
+      name: target_type
+      in: query
+      required: true
+      schema: {type: string, enum: [topic, post]}
+    TargetId:
+      name: target_id
+      in: query
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    Search:
+      name: q
+      in: query
+      description: 模糊搜索词，服务端最多使用前 100 个字符。
+      schema: {type: string, maxLength: 100}
+    ContentTypeOptional:
+      name: type
+      in: query
+      schema: {type: string, enum: [topic, post]}
+    ContentStatus:
+      name: status
+      in: query
+      schema: {$ref: "#/components/schemas/ContentStatus"}
+    Page:
+      name: page
+      in: query
+      schema: {type: integer, minimum: 1, default: 1}
+    PageSize10:
+      name: page_size
+      in: query
+      description: 前端提供 10、20、50 条选项；非法值由服务端归一化。
+      schema: {type: integer, enum: [10, 20, 50], default: 10}
+    PageSize20:
+      name: page_size
+      in: query
+      description: 前端提供 10、20、50 条选项；非法值由服务端归一化。
+      schema: {type: integer, enum: [10, 20, 50], default: 20}
+    PageSize20Admin:
+      name: page_size
+      in: query
+      description: 管理端接受 1–100，界面通常使用 10、20、50。
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    OrderDesc:
+      name: order
+      in: query
+      schema: {type: string, enum: [asc, desc], default: desc}
+
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [ok]}
+    ApiEnvelope:
+      type: object
+      required: [code, msg, data, request_id]
+      properties:
+        code: {type: integer, example: 0}
+        msg: {type: string, example: success}
+        data: {description: 业务数据，具体结构由接口定义}
+        request_id: {type: string, example: 96a086ee-4d3d-482c-98fa-cbd1cff79633}
+    ErrorEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties:
+            code: {type: integer, example: 40001}
+            msg: {type: string, example: invalid request}
+            data: {type: object, nullable: true, example: null}
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 3, maxLength: 32}
+        password: {type: string, format: password, minLength: 6, maxLength: 32}
+        email: {type: string, format: email}
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string, format: password}
+    AdminEmailVerificationRequest:
+      type: object
+      required: [challenge_id, code]
+      properties:
+        challenge_id: {type: string, minLength: 32, maxLength: 64}
+        code: {type: string, pattern: "^[0-9]{6}$"}
+    AuthData:
+      type: object
+      required: [token, user]
+      properties:
+        token: {type: string, description: JWT}
+        user: {$ref: "#/components/schemas/User"}
+    LoginData:
+      type: object
+      required: [requires_email_verification]
+      properties:
+        token: {type: string, description: 普通用户登录时返回}
+        user: {$ref: "#/components/schemas/User"}
+        requires_email_verification: {type: boolean}
+        challenge_id: {type: string}
+        masked_email: {type: string, example: 2***4@qq.com}
+        expires_in_seconds: {type: integer, example: 600}
+        development_verification_code:
+          type: string
+          description: 仅开发环境且 SMTP 不可用时可能返回；前端演示界面默认隐藏。
+    User:
+      type: object
+      required: [id, username, email, avatar, role, status, unlock_level, verified_read_seconds, capabilities, onboarding_statement, background_tag, onboarding_status, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        username: {type: string}
+        email: {type: string}
+        avatar: {type: string}
+        role: {type: string, enum: [user, admin]}
+        status: {type: string, enum: [active, suspended]}
+        unlock_level: {type: integer, minimum: 0, maximum: 3}
+        verified_read_seconds: {type: integer, format: int64, minimum: 0}
+        capabilities:
+          type: array
+          items: {type: string, enum: [browse, bookmark, reply, feedback, create_topic, blind_review, admin]}
+          example: [browse, bookmark, reply, feedback]
+        onboarding_statement: {type: string}
+        background_tag: {type: string}
+        onboarding_status: {type: string, enum: [not_submitted, pending_review, approved, rejected]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    OnboardingRequest:
+      type: object
+      required: [statement, background_tag]
+      properties:
+        statement: {type: string, minLength: 20, maxLength: 1000}
+        background_tag: {type: string, minLength: 2, maxLength: 64}
+    Category:
+      type: object
+      required: [id, name, slug, description, sort_order, is_active, requires_review, created_at, updated_at]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        slug: {type: string}
+        description: {type: string}
+        sort_order: {type: integer}
+        is_active: {type: boolean}
+        requires_review: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    CategoryWriteRequest:
+      type: object
+      required: [name, slug, description, sort_order, is_active, requires_review]
+      properties:
+        name: {type: string, minLength: 2, maxLength: 64}
+        slug: {type: string, minLength: 2, maxLength: 64, example: engineering}
+        description: {type: string, maxLength: 500}
+        sort_order: {type: integer, example: 10}
+        is_active: {type: boolean, example: true}
+        requires_review: {type: boolean, example: false}
+    StructuredContent:
+      type: object
+      required: [claim]
+      properties:
+        claim: {type: string, minLength: 5, description: 核心观点}
+        evidence: {type: string, description: 依据与来源}
+        uncertainty: {type: string, description: 不确定性与适用边界}
+    DraftStructuredContent:
+      type: object
+      properties:
+        claim: {type: string}
+        evidence: {type: string}
+        uncertainty: {type: string}
+    CreateTopicRequest:
+      type: object
+      required: [category_id, title]
+      description: "`content` 是旧客户端兼容字段；新客户端应提交 `structured_content`。两者至少提供一个有效正文。"
+      properties:
+        category_id: {type: integer, format: int64, minimum: 1}
+        title: {type: string, minLength: 3, maxLength: 128}
+        content: {type: string, minLength: 5, deprecated: true}
+        structured_content: {$ref: "#/components/schemas/StructuredContent"}
+    SaveTopicDraftRequest:
+      type: object
+      required: [category_id, structured_content]
+      properties:
+        category_id: {type: integer, format: int64, minimum: 1}
+        title: {type: string, maxLength: 128}
+        structured_content: {$ref: "#/components/schemas/DraftStructuredContent"}
+    UpdateTopicRequest:
+      type: object
+      required: [title, structured_content]
+      properties:
+        title: {type: string, minLength: 3, maxLength: 128}
+        structured_content: {$ref: "#/components/schemas/StructuredContent"}
+    ContentStatus:
+      type: string
+      enum: [draft, cooling, pending_review, published, rejected, recalled, hidden]
+    Topic:
+      type: object
+      required: [id, category_id, user_id, title, content, structured_content, status, view_count, post_count, like_count, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        category_id: {type: integer, format: int64}
+        user_id: {type: integer, format: int64}
+        title: {type: string}
+        content: {type: string, description: 结构化正文的兼容文本表示}
+        structured_content: {$ref: "#/components/schemas/StructuredContent"}
+        status: {$ref: "#/components/schemas/ContentStatus"}
+        cooling_ends_at: {type: string, format: date-time, nullable: true}
+        view_count: {type: integer, minimum: 0}
+        post_count: {type: integer, minimum: 0}
+        like_count: {type: integer, minimum: 0, description: 历史兼容计数}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        author_name: {type: string}
+        author_avatar: {type: string}
+    CreatePostRequest:
+      type: object
+      required: [content]
+      properties:
+        parent_id: {type: integer, format: int64, nullable: true}
+        content: {type: string, minLength: 1}
+        post_type: {type: string, enum: [debate, evidence, experience, thanks], default: debate}
+    UpdatePostRequest:
+      type: object
+      required: [content, post_type]
+      properties:
+        content: {type: string, minLength: 1}
+        post_type: {type: string, enum: [debate, evidence, experience, thanks]}
+    Post:
+      type: object
+      required: [id, topic_id, user_id, content, post_type, status, like_count, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        topic_id: {type: integer, format: int64}
+        user_id: {type: integer, format: int64}
+        parent_id: {type: integer, format: int64, nullable: true}
+        content: {type: string}
+        post_type: {type: string, enum: [debate, evidence, experience, thanks]}
+        status: {$ref: "#/components/schemas/ContentStatus"}
+        cooling_ends_at: {type: string, format: date-time, nullable: true}
+        like_count: {type: integer, minimum: 0}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        author_name: {type: string}
+        author_avatar: {type: string}
+    Bookmark:
+      type: object
+      required: [id, user_id, topic_id, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        user_id: {type: integer, format: int64}
+        topic_id: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        topic: {$ref: "#/components/schemas/Topic"}
+    GovernancePolicy:
+      type: object
+      required: [cooling_seconds, reply_dwell_seconds, heartbeat_seconds, long_topic_chars, level_1_read_seconds, level_2_read_seconds, level_3_read_seconds]
+      properties:
+        cooling_seconds: {type: integer}
+        reply_dwell_seconds: {type: integer}
+        heartbeat_seconds: {type: integer}
+        long_topic_chars: {type: integer}
+        level_1_read_seconds: {type: integer}
+        level_2_read_seconds: {type: integer}
+        level_3_read_seconds: {type: integer}
+    StartReadingRequest:
+      oneOf:
+        - type: object
+          required: [topic_id]
+          properties:
+            topic_id: {type: integer, format: int64, minimum: 1}
+          additionalProperties: false
+        - type: object
+          required: [resource]
+          properties:
+            resource: {type: string, enum: [forum-guide]}
+          additionalProperties: false
+    ReadingHeartbeatRequest:
+      type: object
+      required: [progress]
+      properties:
+        progress: {type: integer, minimum: 0, maximum: 100}
+        reply_focused: {type: boolean, default: false}
+    CompleteReadingRequest:
+      type: object
+      properties:
+        progress: {type: integer, minimum: 0, maximum: 100}
+        reply_focused: {type: boolean, default: false}
+    ReadingSession:
+      type: object
+      required: [id, resource_type, resource_key, progress, reading_seconds, reply_dwell_seconds, bottom_reached, requires_reply_dwell, eligible, completed, last_heartbeat_at]
+      properties:
+        id: {type: string}
+        topic_id: {type: integer, format: int64, nullable: true}
+        resource_type: {type: string, enum: [topic, guide]}
+        resource_key: {type: string}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        reading_seconds: {type: integer, minimum: 0}
+        reply_dwell_seconds: {type: integer, minimum: 0}
+        bottom_reached: {type: boolean}
+        requires_reply_dwell: {type: boolean}
+        eligible: {type: boolean}
+        completed: {type: boolean}
+        last_heartbeat_at: {type: string, format: date-time}
+    FeedbackRequest:
+      type: object
+      required: [target_type, target_id, stance, tag, reason]
+      properties:
+        target_type: {type: string, enum: [topic, post]}
+        target_id: {type: integer, format: int64, minimum: 1}
+        stance: {type: string, enum: [support, challenge]}
+        tag: {type: string, enum: [logical, new_perspective, well_sourced, empathetic, factual_concern, reasoning_gap, inappropriate]}
+        reason: {type: string, minLength: 5, maxLength: 120}
+    Feedback:
+      type: object
+      required: [id, user_id, target_type, target_id, stance, tag, reason, status, llm_audit_status, llm_audit_result, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        user_id: {type: integer, format: int64}
+        target_type: {type: string, enum: [topic, post]}
+        target_id: {type: integer, format: int64}
+        stance: {type: string, enum: [support, challenge]}
+        tag: {type: string, enum: [logical, new_perspective, well_sourced, empathetic, factual_concern, reasoning_gap, inappropriate, legacy_support]}
+        reason: {type: string}
+        status: {type: string}
+        llm_audit_status: {type: string}
+        llm_audit_result: {type: object, additionalProperties: true, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    FeedbackSummary:
+      type: object
+      required: [support, challenge, score, tags]
+      properties:
+        support: {type: integer}
+        challenge: {type: integer}
+        score: {type: integer}
+        tags:
+          type: object
+          additionalProperties: {type: integer}
+        mine: {$ref: "#/components/schemas/Feedback"}
+    CommentCluster:
+      type: object
+      required: [id, topic_id, tag, summary, weight, post_ids, generation, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        topic_id: {type: integer, format: int64}
+        tag: {type: string}
+        summary: {type: string}
+        weight: {type: number, format: double}
+        post_ids: {type: array, items: {type: integer, format: int64}}
+        generation: {type: integer}
+        created_at: {type: string, format: date-time}
+    ReviewRequest:
+      type: object
+      required: [appropriateness, sincerity, reason]
+      properties:
+        appropriateness: {type: boolean}
+        sincerity: {type: boolean}
+        reason: {type: string, minLength: 10, maxLength: 500}
+    ReviewTask:
+      type: object
+      required: [id, batch_id, subject_type, subject, task_status, deadline, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        batch_id: {type: integer, format: int64}
+        subject_type: {type: string, enum: [user, topic]}
+        subject: {type: object, additionalProperties: true}
+        task_status: {type: string}
+        deadline: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+    ReviewSubmission:
+      type: object
+      required: [id, batch_id, result, llm_check_status, completed_at]
+      properties:
+        id: {type: integer, format: int64}
+        batch_id: {type: integer, format: int64}
+        result: {type: string, enum: [pass, reject]}
+        llm_check_status: {type: string}
+        completed_at: {type: string, format: date-time}
+    LikeRequest:
+      type: object
+      required: [target_type, target_id]
+      properties:
+        target_type: {type: string, enum: [topic, post]}
+        target_id: {type: integer, format: int64, minimum: 1}
+    MyContentItem:
+      type: object
+      required: [id, type, topic_id, title, excerpt, status, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        type: {type: string, enum: [topic, post]}
+        topic_id: {type: integer, format: int64}
+        title: {type: string}
+        excerpt: {type: string}
+        status: {$ref: "#/components/schemas/ContentStatus"}
+        post_type: {type: string, enum: [debate, evidence, experience, thanks]}
+        cooling_ends_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    SearchResult:
+      type: object
+      required: [id, type, topic_id, title, excerpt, author_name, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        type: {type: string, enum: [topic, post]}
+        topic_id: {type: integer, format: int64}
+        title: {type: string}
+        excerpt: {type: string}
+        author_name: {type: string}
+        created_at: {type: string, format: date-time}
+    AdminUser:
+      type: object
+      required: [id, username, email, role, status, unlock_level, trust_score, verified_read_seconds, onboarding_status, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        username: {type: string}
+        email: {type: string}
+        role: {type: string, enum: [user, admin]}
+        status: {type: string, enum: [active, suspended]}
+        unlock_level: {type: integer, minimum: 0, maximum: 3}
+        trust_score: {type: integer}
+        verified_read_seconds: {type: integer, format: int64}
+        onboarding_status: {type: string}
+        created_at: {type: string, format: date-time}
+    AdminUserUpdateRequest:
+      type: object
+      required: [username, role, status, unlock_level, trust_score, reason]
+      properties:
+        username: {type: string, minLength: 3, maxLength: 32}
+        email: {type: string, format: email, maxLength: 128, description: 管理员身份必须配置验证邮箱}
+        role: {type: string, enum: [user, admin]}
+        status: {type: string, enum: [active, suspended]}
+        unlock_level: {type: integer, minimum: 0, maximum: 3}
+        trust_score: {type: integer, minimum: -1000, maximum: 10000}
+        reason: {type: string, minLength: 5, maxLength: 200}
+    UserStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [active, suspended]}
+    AdminContent:
+      type: object
+      required: [id, type, title, excerpt, author_name, status, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        type: {type: string, enum: [topic, post]}
+        title: {type: string}
+        excerpt: {type: string}
+        author_name: {type: string}
+        status: {$ref: "#/components/schemas/ContentStatus"}
+        created_at: {type: string, format: date-time}
+    VisibilityRequest:
+      type: object
+      required: [hidden]
+      properties:
+        hidden: {type: boolean}
+    AdminLlmJob:
+      type: object
+      required: [id, job_type, aggregate_type, aggregate_id, status, attempts, model, result, error_message, prompt_tokens, completion_tokens, latency_ms, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        job_type: {type: string, enum: [feedback_audit, review_audit, review_fallback, comment_cluster]}
+        aggregate_type: {type: string}
+        aggregate_id: {type: integer, format: int64}
+        status: {type: string}
+        attempts: {type: integer}
+        model: {type: string}
+        result: {type: object, additionalProperties: true, nullable: true}
+        error_message: {type: string}
+        prompt_tokens: {type: integer}
+        completion_tokens: {type: integer}
+        latency_ms: {type: integer}
+        created_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time, nullable: true}
+    AdminTrustLog:
+      type: object
+      required: [id, user_id, username, event_type, score_delta, reason, reference_type, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        user_id: {type: integer, format: int64}
+        username: {type: string}
+        event_type: {type: string}
+        score_delta: {type: integer}
+        reason: {type: string}
+        reference_type: {type: string}
+        reference_id: {type: integer, format: int64, nullable: true}
+        created_at: {type: string, format: date-time}
+    AdminDailyTrend:
+      type: object
+      required: [date, users, topics, posts, feedback]
+      properties:
+        date: {type: string, format: date}
+        users: {type: integer}
+        topics: {type: integer}
+        posts: {type: integer}
+        feedback: {type: integer}
+    AdminCategoryStat:
+      type: object
+      required: [name, topics, posts]
+      properties:
+        name: {type: string}
+        topics: {type: integer, format: int64}
+        posts: {type: integer, format: int64}
+    AdminOverview:
+      type: object
+      required: [users_total, topics_total, posts_total, active_users_7_days, new_users_today, feedback_total, bookmarks_total, suspended_users, verified_read_hours, content_status, trust_distribution, level_distribution, feedback_distribution, review_total, review_completed, review_expired, review_fair, llm_calls, llm_success, llm_average_ms, llm_prompt_tokens, llm_output_tokens, trend, trend_days, categories]
+      properties:
+        users_total: {type: integer, format: int64}
+        topics_total: {type: integer, format: int64}
+        posts_total: {type: integer, format: int64}
+        active_users_7_days: {type: integer, format: int64}
+        new_users_today: {type: integer, format: int64}
+        feedback_total: {type: integer, format: int64}
+        bookmarks_total: {type: integer, format: int64}
+        suspended_users: {type: integer, format: int64}
+        verified_read_hours: {type: number, format: double}
+        content_status: {type: object, additionalProperties: {type: integer, format: int64}}
+        trust_distribution: {type: object, additionalProperties: {type: integer, format: int64}}
+        level_distribution: {type: object, additionalProperties: {type: integer, format: int64}}
+        feedback_distribution: {type: object, additionalProperties: {type: integer, format: int64}}
+        review_total: {type: integer, format: int64}
+        review_completed: {type: integer, format: int64}
+        review_expired: {type: integer, format: int64}
+        review_fair: {type: integer, format: int64}
+        llm_calls: {type: integer, format: int64}
+        llm_success: {type: integer, format: int64}
+        llm_average_ms: {type: number, format: double}
+        llm_prompt_tokens: {type: integer, format: int64}
+        llm_output_tokens: {type: integer, format: int64}
+        trend: {type: array, items: {$ref: "#/components/schemas/AdminDailyTrend"}}
+        trend_days: {type: integer}
+        categories: {type: array, items: {$ref: "#/components/schemas/AdminCategoryStat"}}
+    StatusData:
+      type: object
+      additionalProperties: true
+      example: {status: queued}
+    BookmarkStatusData:
+      type: object
+      required: [bookmarked]
+      properties:
+        bookmarked: {type: boolean}
+    VisibilityData:
+      type: object
+      required: [hidden]
+      properties:
+        hidden: {type: boolean}
+
+    TopicMutationData:
+      type: object
+      required: [topic_id, status]
+      properties:
+        topic_id: {type: integer, format: int64}
+        status: {$ref: "#/components/schemas/ContentStatus"}
+        cooling_ends_at: {type: string, format: date-time, nullable: true}
+    PostMutationData:
+      type: object
+      required: [post_id, status]
+      properties:
+        post_id: {type: integer, format: int64}
+        status: {$ref: "#/components/schemas/ContentStatus"}
+        cooling_ends_at: {type: string, format: date-time, nullable: true}
+    TopicPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Topic"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    PostPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Post"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    BookmarkPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Bookmark"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    MyContentPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/MyContentItem"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    SearchPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/SearchResult"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    AdminUserPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/AdminUser"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    AdminContentPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/AdminContent"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    AdminLlmJobPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/AdminLlmJob"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+    AdminTrustLogPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/AdminTrustLog"}}
+        total: {type: integer, format: int64}
+        page: {type: integer}
+        page_size: {type: integer}
+
+    AuthEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AuthData"}}
+    LoginEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/LoginData"}}
+    UserEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/User"}}
+    CategoryEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/Category"}}
+    CategoryListEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties:
+            data: {type: array, items: {$ref: "#/components/schemas/Category"}}
+    TopicEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/Topic"}}
+    TopicMutationEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/TopicMutationData"}}
+    PostMutationEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/PostMutationData"}}
+    TopicPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/TopicPage"}}
+    PostEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/Post"}}
+    PostPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/PostPage"}}
+    BookmarkPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/BookmarkPage"}}
+    GovernancePolicyEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/GovernancePolicy"}}
+    ReadingSessionEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/ReadingSession"}}
+    FeedbackEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/Feedback"}}
+    FeedbackSummaryEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/FeedbackSummary"}}
+    ClusterListEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties:
+            data: {type: array, items: {$ref: "#/components/schemas/CommentCluster"}}
+    ReviewTaskListEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties:
+            data: {type: array, items: {$ref: "#/components/schemas/ReviewTask"}}
+    ReviewSubmissionEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/ReviewSubmission"}}
+    MyContentPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/MyContentPage"}}
+    SearchPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/SearchPage"}}
+    AdminOverviewEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AdminOverview"}}
+    AdminUserEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AdminUser"}}
+    AdminUserPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AdminUserPage"}}
+    AdminContentPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AdminContentPage"}}
+    AdminLlmJobPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AdminLlmJobPage"}}
+    AdminTrustLogPageEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/AdminTrustLogPage"}}
+    StatusEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/StatusData"}}
+    BookmarkStatusEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/BookmarkStatusData"}}
+    VisibilityEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/ApiEnvelope"}
+        - type: object
+          properties: {data: {$ref: "#/components/schemas/VisibilityData"}}
+
+  responses:
+    AuthSuccess:
+      description: 注册或管理员邮箱校验成功
+      content: {application/json: {schema: {$ref: "#/components/schemas/AuthEnvelope"}}}
+    LoginSuccess:
+      description: 登录成功或需要管理员邮箱验证
+      content: {application/json: {schema: {$ref: "#/components/schemas/LoginEnvelope"}}}
+    UserSuccess:
+      description: 当前用户资料
+      content: {application/json: {schema: {$ref: "#/components/schemas/UserEnvelope"}}}
+    CategorySuccess:
+      description: 分类
+      content: {application/json: {schema: {$ref: "#/components/schemas/CategoryEnvelope"}}}
+    CategoryListSuccess:
+      description: 分类列表
+      content: {application/json: {schema: {$ref: "#/components/schemas/CategoryListEnvelope"}}}
+    TopicSuccess:
+      description: 主题
+      content: {application/json: {schema: {$ref: "#/components/schemas/TopicEnvelope"}}}
+    TopicMutationSuccess:
+      description: 主题已提交冷静期
+      content: {application/json: {schema: {$ref: "#/components/schemas/TopicMutationEnvelope"}}}
+    TopicPageSuccess:
+      description: 主题分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/TopicPageEnvelope"}}}
+    PostSuccess:
+      description: 回复
+      content: {application/json: {schema: {$ref: "#/components/schemas/PostEnvelope"}}}
+    PostMutationSuccess:
+      description: 回复已提交冷静期
+      content: {application/json: {schema: {$ref: "#/components/schemas/PostMutationEnvelope"}}}
+    PostPageSuccess:
+      description: 回复分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/PostPageEnvelope"}}}
+    BookmarkPageSuccess:
+      description: 收藏分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/BookmarkPageEnvelope"}}}
+    BookmarkStatusSuccess:
+      description: 收藏状态
+      content: {application/json: {schema: {$ref: "#/components/schemas/BookmarkStatusEnvelope"}}}
+    GovernancePolicySuccess:
+      description: 治理策略
+      content: {application/json: {schema: {$ref: "#/components/schemas/GovernancePolicyEnvelope"}}}
+    ReadingSessionSuccess:
+      description: 阅读会话
+      content: {application/json: {schema: {$ref: "#/components/schemas/ReadingSessionEnvelope"}}}
+    FeedbackSuccess:
+      description: 语境反馈
+      content: {application/json: {schema: {$ref: "#/components/schemas/FeedbackEnvelope"}}}
+    FeedbackSummarySuccess:
+      description: 语境反馈汇总
+      content: {application/json: {schema: {$ref: "#/components/schemas/FeedbackSummaryEnvelope"}}}
+    ClusterListSuccess:
+      description: 评论聚类列表
+      content: {application/json: {schema: {$ref: "#/components/schemas/ClusterListEnvelope"}}}
+    ReviewTaskListSuccess:
+      description: 匿名评审任务列表
+      content: {application/json: {schema: {$ref: "#/components/schemas/ReviewTaskListEnvelope"}}}
+    ReviewSubmissionSuccess:
+      description: 匿名评审提交结果
+      content: {application/json: {schema: {$ref: "#/components/schemas/ReviewSubmissionEnvelope"}}}
+    MyContentPageSuccess:
+      description: 我的内容分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/MyContentPageEnvelope"}}}
+    SearchPageSuccess:
+      description: 搜索结果分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/SearchPageEnvelope"}}}
+    AdminOverviewSuccess:
+      description: 管理统计总览
+      content: {application/json: {schema: {$ref: "#/components/schemas/AdminOverviewEnvelope"}}}
+    AdminUserSuccess:
+      description: 管理端用户详情
+      content: {application/json: {schema: {$ref: "#/components/schemas/AdminUserEnvelope"}}}
+    AdminUserPageSuccess:
+      description: 管理端用户分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/AdminUserPageEnvelope"}}}
+    AdminContentPageSuccess:
+      description: 管理端内容分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/AdminContentPageEnvelope"}}}
+    AdminLlmJobPageSuccess:
+      description: LLM 作业分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/AdminLlmJobPageEnvelope"}}}
+    AdminTrustLogPageSuccess:
+      description: 信任流水分页
+      content: {application/json: {schema: {$ref: "#/components/schemas/AdminTrustLogPageEnvelope"}}}
+    StatusSuccess:
+      description: 操作成功
+      content: {application/json: {schema: {$ref: "#/components/schemas/StatusEnvelope"}}}
+    VisibilitySuccess:
+      description: 内容可见性已更新
+      content: {application/json: {schema: {$ref: "#/components/schemas/VisibilityEnvelope"}}}
+    BadRequest: {$ref: "#/components/responses/GenericError"}
+    Unauthorized: {$ref: "#/components/responses/GenericError"}
+    Forbidden: {$ref: "#/components/responses/GenericError"}
+    NotFound: {$ref: "#/components/responses/GenericError"}
+    Conflict: {$ref: "#/components/responses/GenericError"}
+    TooManyRequests: {$ref: "#/components/responses/GenericError"}
+    ServiceUnavailable: {$ref: "#/components/responses/GenericError"}
+    GenericError:
+      description: 统一错误响应；HTTP 状态码表达错误类别，`code` 为业务错误码。
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorEnvelope"}

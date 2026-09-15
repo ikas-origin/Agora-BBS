@@ -1,6 +1,6 @@
 # Agora-BBS API 使用说明
 
-规范文件为 `docs/openapi.yaml`。本文件解释常用流程，默认基址为 `http://localhost:8080/api/v1`。
+规范文件为 `docs/apifox/Agora-BBS.openapi.yaml`，可直接导入 Apifox；导入步骤见 `docs/apifox/README.md`。本文件解释常用流程，默认基址为 `http://localhost:8080/api/v1`。
 
 ## 1. 通用约定
 
@@ -17,6 +17,8 @@
 ```
 
 需要登录的接口使用 `Authorization: Bearer <JWT>`。HTTP 400/401/403/404/409/429/500 分别表示请求错误、未登录、无权限、不存在、状态冲突、限流和服务异常。普通用户响应不包含具体信任分。
+
+用户能力字段采用固定标识：`browse`、`bookmark`、`reply`、`feedback`、`create_topic`、`blind_review`；管理员还包含 `admin`。其中 L3 匿名盲审能力统一使用 `blind_review`。
 
 ## 2. 接口总览
 
